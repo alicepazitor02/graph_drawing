@@ -6,7 +6,7 @@
 
 ===PyCharm===
 
-If you choose to use pycharm, you can open the source code from there but you need to run the script from outside the terminal 
+If you choose to use pycharm, you can open the source code in the IDE but you need to run the script from outside
 
 1. Open Command Prompt
 2. Navigate to mygraph.py
