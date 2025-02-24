@@ -5,6 +5,7 @@
 3. finally run the script: it will open a canvas where you can draw nodes by clicking on the canvas and edges by clicking the existing nodes
 
 ===PyCharm===
+
 If you choose to use pycharm, you can open the source code from there but you need to run the script from outside the terminal 
 
 1. Open Command Prompt
