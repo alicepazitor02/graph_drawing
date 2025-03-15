@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import simpledialog, messagebox
 import networkx as nx
 import matplotlib.pyplot as plt
-
+import math
 
 class GraphInterface:
     def __init__(self, root):
@@ -35,8 +35,14 @@ class GraphInterface:
                               ("Show Graph", self.show_graph),
                               ("Set First Node", self.set_first_node),
                               ("Set Terminal Node", self.set_terminal_node),
-                              ("Check Flow Balance", self.check_flow_balance)]:
+                              ("Check Flow Balance", self.check_flow_balance),
+                              ("Residual Graph", self.residual_graph),
+                              ("Generic Algorithm", self.generic_algo)]:
+                           
             tk.Button(root, text=text, command=command).pack(side=tk.LEFT)
+        self.outflow_start = 0
+        self.ROW = len(self.graph)
+
 
     def get_flow(self, n1, n2, capacity):
         while True:
@@ -168,15 +174,16 @@ class GraphInterface:
             messagebox.showinfo("Terminal Node Selected", f"Node {clicked_node} is selected as the Terminal Node.")
             self.canvas.bind("<Button-1>", self.on_click)  # Reset to normal click behavior
     
+
     def check_flow_balance(self):
         # Check the flow balance for all nodes
         okay = True
         if not self.first_node or not self.terminal_node:
             messagebox.showerror("Error", "Please set both the first (source) and terminal (sink) nodes.")
             return
-        outflow_start = sum(self.graph[u][v]['flow'] for u, v in self.graph.out_edges(self.first_node))
+        self.outflow_start = sum(self.graph[u][v]['flow'] for u, v in self.graph.out_edges(self.first_node))
         inflow_terminal = sum(self.graph[u][v]['flow'] for u, v in self.graph.in_edges(self.terminal_node))
-        if outflow_start != inflow_terminal:
+        if self.outflow_start != inflow_terminal:
             messagebox.showerror("Flow Balance Error", f"Flow into node terminal node {self.terminal_node} does not match the flow out of start node {self.first_node}.")
         else: 
             for node in self.graph.nodes:
@@ -188,8 +195,280 @@ class GraphInterface:
                         okay = False
                         break
             if okay:
-                messagebox.showinfo("OK")         
+                messagebox.showinfo("OK")
+                return okay   
 
+    
+    def residual_graph(self):
+
+        if not self.check_flow_balance():
+            print("Failed flow constraint")
+            return
+        
+        residual = nx.DiGraph()
+        residual.add_nodes_from(self.graph.nodes())
+
+        for u, v, data in self.graph.edges(data=True):
+
+            capacity = data['capacity']
+            flow = data['flow']
+
+            residual_flow = capacity - flow
+            backflow = flow
+
+            if residual.has_edge(v, u):
+                residual_flow_rev = self.graph[v][u]['capacity'] - self.graph[v][u]['flow']
+                backflow_rev = self.graph[v][u]['flow']
+                residual_flow += backflow_rev
+                backflow += residual_flow_rev
+            
+
+            print(residual_flow, backflow)
+            
+            
+            if residual_flow > 0:
+                residual.add_edge(u, v, capacity = residual_flow)
+            if backflow > 0:
+                residual.add_edge(v, u, capacity = backflow)
+
+        self.draw_residual_graph(residual)
+        return residual
+    
+    def draw_residual_graph(self, residual):
+        """Draws the residual graph with straight edges, arrows, and labels for residual capacity."""
+
+        # Create a new Tkinter window for the residual graph
+        residual_window = tk.Toplevel(self.root)
+        residual_window.title("Residual Graph")
+
+        # Create a canvas in the new window
+        residual_canvas = tk.Canvas(residual_window, height=600, width=800, bg="white")
+        residual_canvas.pack()
+
+        # Draw nodes first
+        for node, (x, y) in self.nodes.items():
+            residual_canvas.create_oval(x - 10, y - 10, x + 10, y + 10, fill="cornflower blue", outline="red")
+            residual_canvas.create_text(x, y, text=str(node), fill="white", font=("Arial", 12))
+
+        # Set to keep track of previously drawn edges (to avoid duplicate lines)
+        drawn_edges = set()
+        offset = 0
+        off_label = 20
+        # Draw edges of the residual graph with straight lines and arrows
+        for u, v, data in residual.edges(data=True):
+            residual_capacity = data['capacity']  # Residual capacity (not flow!)
+
+            # Get node positions
+            x1, y1 = self.nodes[u]
+            x2, y2 = self.nodes[v]
+
+            # Draw the edge u -> v (one direction), with an arrow at the end
+            if u > v:
+                offset = 10
+                off_label = -20    
+
+            residual_canvas.create_line(x1, y1+offset, x2, y2 + offset, fill="red", width=2, arrow=tk.LAST)
+
+            # Position label for the residual capacity for u -> v
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            residual_canvas.create_text(mid_x + off_label, mid_y, text=f"{residual_capacity}", fill="red", font=("Arial", 10))
+
+            # Mark this edge as drawn
+            drawn_edges.add((u, v))
+            offset = 0
+            off_label = 20
+        
+
+    def dfs_find_augmenting_path(self, residual, node, sink, visited, parent):
+        """Recursive DFS to find an augmenting path from node to sink."""
+        if node == sink:
+            return True  # Found a path to sink
+
+        visited.add(node)
+
+        for neighbor in residual.neighbors(node):
+            if neighbor not in visited and residual[node][neighbor]['capacity'] > 0:
+                parent[neighbor] = node  # Store the path
+                if self.dfs_find_augmenting_path(residual, neighbor, sink, visited, parent):
+                    return True  # If path is found, return immediately
+
+        return False  # No path found
+    
+    def bfs_find_augumenting_path(self, residual, source, sink):
+
+        p = [0] * self.ROW
+        v = [] #this is the queue
+        v.append(source)
+        p[source] = sink
+        while(v):
+            x = v.pop(0)
+            for neighbor in residual.neighbors(x):
+                if p[neighbor] == 0 and residual[x][neighbor]['capacity'] > 0:
+                    v.append(neighbor)
+                    p[neighbor] = x
+                    if neighbor == sink:
+                        return True
+        return False
+    
+
+    def ford_fulkerson(self, source, sink):
+
+        residual = self.residual_graph()
+        parent = {} # i use this to keep the path
+        max_flow = 0
+
+        while(True):
+            found_path = self.bfs_find_augumenting_path(self, residual, source, sink)
+
+            if not found_path:
+                break
+
+            path_flow = float('Inf') # or bottleneck cum am folosit anterior
+            s = sink
+            while s != source:
+                path_flow = min(path_flow, residual[s][parent[s]]['capacity'])
+                s = parent[s]
+
+            #update capacities
+
+            v = sink
+            while v != source:
+                u = parent[v]
+                residual[u][v]['capacity'] -= path_flow
+                if residual.has_edge(v,u):
+                    residual[v][u] += path_flow
+                else:
+                    residual.add_edge(v, u)
+                v = parent[v]
+
+            max_flow += path_flow
+
+            return max_flow + self.outflow_start
+        
+    
+
+                
+
+                
+
+            
+
+    
+
+
+
+    
+    
+
+    
+    def augument_flow_along_path(self, residual, path):
+    
+        aug_residual = nx.DiGraph()
+        aug_residual.add_nodes_from(self.graph.nodes())
+
+        for u, v, data in residual.edges(data=True):
+
+            capacity = data['capacity']
+            flow = data['flow']
+
+            residual_flow = capacity - flow
+            backflow = flow
+
+            if residual.has_edge(v, u):
+                residual_flow_rev = self.graph[v][u]['capacity'] - self.graph[v][u]['flow']
+                backflow_rev = self.graph[v][u]['flow']
+                residual_flow += backflow_rev
+                backflow += residual_flow_rev
+
+            print(residual_flow, backflow)
+            
+            
+            if residual_flow > 0:
+                residual.add_edge(u, v, capacity = residual_flow)
+            if backflow > 0:
+                residual.add_edge(v, u, capacity = backflow)
+
+        self.draw_residual_graph(residual)
+        return residual
+
+    
+    def generic_algo(self):
+        """Computes max flow using DFS to find augmenting paths until no more exist."""
+
+        residual = self.residual_graph()  # Get the residual graph
+        if residual is None:
+            print("Error: Residual graph not created.")
+            return
+
+        source = self.first_node
+        sink = self.terminal_node
+        max_flow = 0  # Track total flow
+
+        while True:
+            parent = {}  # Dictionary to store the path
+            visited = set()  # Track visited nodes
+
+            # Find an augmenting path using DFS
+            found_path = self.dfs_find_augmenting_path(residual, source, sink, visited, parent)
+            if not found_path:
+                break  # No more augmenting paths, terminate
+
+            # Reconstruct the path
+            path = []
+            node = sink
+            while node in parent:
+                path.append(node)
+                node = parent[node]
+            path.append(source)
+            path.reverse()
+
+            print("Augmenting Path Found:", path)
+
+            # Find the bottleneck capacity (smallest capacity along the path)
+            bottleneck = float('inf')
+            for i in range(len(path) - 1):
+                capacity = residual[path[i]][path[i + 1]]['capacity']
+                bottleneck = min(bottleneck, capacity)
+
+            print(f"Bottleneck capacity: {bottleneck}")
+
+            # Augment the flow along the path
+            for i in range(len(path) - 1):
+                u, v = path[i], path[i + 1]
+
+                # Reduce capacity in forward direction
+                residual[u][v]['capacity'] -= bottleneck
+
+                # Increase capacity in reverse direction (to allow backflow)
+                if residual.has_edge(v, u):
+                    residual[v][u]['capacity'] += bottleneck
+                else:
+                    residual.add_edge(v, u, capacity=bottleneck)
+
+            # Update max flow
+            max_flow += bottleneck
+            
+
+        print("Maximum Flow:", max_flow + self.outflow_start)
+        return max_flow
+    
+
+      
+
+    
+
+    
+
+
+
+                
+
+
+
+
+
+            
 
 # Create the Tkinter root window
 root = tk.Tk()
