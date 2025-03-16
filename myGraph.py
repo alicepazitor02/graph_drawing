@@ -37,7 +37,10 @@ class GraphInterface:
                               ("Set Terminal Node", self.set_terminal_node),
                               ("Check Flow Balance", self.check_flow_balance),
                               ("Residual Graph", self.residual_graph),
-                              ("Generic Algorithm", self.generic_algo)]:
+                              ("Generic Algorithm", self.generic_algo),
+                              ("Edmonds Karp", self.edmonds_karp),
+                              ("Ford Fulkerson", self.ford_fulkerson)
+                              ]:
                            
             tk.Button(root, text=text, command=command).pack(side=tk.LEFT)
         self.outflow_start = 0
@@ -223,7 +226,7 @@ class GraphInterface:
                 backflow += residual_flow_rev
             
 
-            print(residual_flow, backflow)
+            #print(residual_flow, backflow)
             
             
             if residual_flow > 0:
@@ -262,12 +265,12 @@ class GraphInterface:
             x1, y1 = self.nodes[u]
             x2, y2 = self.nodes[v]
 
-            # Draw the edge u -> v (one direction), with an arrow at the end
+           
             if u > v:
                 offset = 10
                 off_label = -20    
 
-            residual_canvas.create_line(x1, y1+offset, x2, y2 + offset, fill="red", width=2, arrow=tk.LAST)
+            residual_canvas.create_line(x1, y1+offset, x2, y2 + offset, fill="purple", width=2, arrow=tk.LAST)
 
             # Position label for the residual capacity for u -> v
             mid_x = (x1 + x2) / 2
@@ -280,73 +283,158 @@ class GraphInterface:
             off_label = 20
         
 
-    def dfs_find_augmenting_path(self, residual, node, sink, visited, parent):
-        """Recursive DFS to find an augmenting path from node to sink."""
-        if node == sink:
-            return True  # Found a path to sink
+    def dfs_find_augmenting_path(self, residual, source, sink, parent):
+       
+        stack = [source]
 
-        visited.add(node)
+        for i in range(len(parent)):
+           parent[i] = -1
+        
+        parent[source] = -2
 
-        for neighbor in residual.neighbors(node):
-            if neighbor not in visited and residual[node][neighbor]['capacity'] > 0:
-                parent[neighbor] = node  # Store the path
-                if self.dfs_find_augmenting_path(residual, neighbor, sink, visited, parent):
-                    return True  # If path is found, return immediately
+        while stack:
+            node = stack.pop() #LIFO - > Last in first out
 
-        return False  # No path found
-    
-    def bfs_find_augumenting_path(self, residual, source, sink):
+            for neighbor in self.graph.neighbors(node):
+                if parent[neighbor] == -1 and residual[node][neighbor]['capacity'] > 0 :
+                    stack.append(neighbor)
+                    parent[neighbor] = node
 
-        p = [0] * self.ROW
-        v = [] #this is the queue
-        v.append(source)
-        p[source] = sink
-        while(v):
-            x = v.pop(0)
-            for neighbor in residual.neighbors(x):
-                if p[neighbor] == 0 and residual[x][neighbor]['capacity'] > 0:
-                    v.append(neighbor)
-                    p[neighbor] = x
                     if neighbor == sink:
                         return True
         return False
+       
+
+       
+
+
+
     
+    def bfs_find_augumenting_path(self, residual, source, sink, parent):
 
-    def ford_fulkerson(self, source, sink):
+        """Uses BFS to find an augumenting path in the residual graph
+           Updates the parent list to store the path
+           Returns true if a path is found, otherwise false"""
+       
+        for i in range(self.graph.number_of_nodes()+ 1):
+            parent[i] = -1
+        queue = [source]
+        parent[source] = -2  # Mark source, but it has no real parent
 
+        while queue:
+            x = queue.pop(0)  # Dequeue
+
+            for neighbor in residual.neighbors(x):
+               
+                if parent[neighbor] == -1 and residual[x][neighbor]['capacity'] > 0:
+                    queue.append(neighbor)
+                    parent[neighbor] = x  # Store parent
+
+                    if neighbor == sink:
+                        return True  # Found augmenting path
+
+        return False  # No path found
+
+
+    def edmonds_karp(self):
         residual = self.residual_graph()
-        parent = {} # i use this to keep the path
+        parent = [-1] * (self.graph.number_of_nodes() + 1)  # Initialize parent list
         max_flow = 0
 
-        while(True):
-            found_path = self.bfs_find_augumenting_path(self, residual, source, sink)
+        source = self.first_node
+        sink = self.terminal_node
 
+        while True:
+            found_path = self.bfs_find_augumenting_path(residual, source, sink, parent)
+        
             if not found_path:
                 break
 
-            path_flow = float('Inf') # or bottleneck cum am folosit anterior
+            # Find bottleneck capacity (minimum capacity along path)
+            path_flow = float('Inf')
             s = sink
+            
+            path = []
+            path.append(sink)
             while s != source:
-                path_flow = min(path_flow, residual[s][parent[s]]['capacity'])
+                path.append(s)
+                path_flow = min(path_flow, residual[parent[s]][s]['capacity'])
                 s = parent[s]
+            path.append(source)
+            path.reverse()
+            print("Found Path: {", path, "}")
 
-            #update capacities
-
+            # Update residual capacities
             v = sink
             while v != source:
                 u = parent[v]
                 residual[u][v]['capacity'] -= path_flow
-                if residual.has_edge(v,u):
-                    residual[v][u] += path_flow
+
+                if residual.has_edge(v, u):
+                    residual[v][u]['capacity'] += path_flow
                 else:
-                    residual.add_edge(v, u)
+                    residual.add_edge(v, u, capacity=path_flow)  # Ensure reverse edge
+
                 v = parent[v]
 
-            max_flow += path_flow
+            max_flow += path_flow  # Accumulate max flow
+            print("Maximum Flow", max_flow + self.outflow_start)
 
-            return max_flow + self.outflow_start
-        
+        return max_flow + self.outflow_start  
     
+    def ford_fulkerson(self):
+
+        residual = self.residual_graph()
+
+        if residual is None:
+            print("Residual graph not available")
+        parent = [-1] * (self.graph.number_of_nodes() + 1)  # Initialize parent list
+        max_flow = 0
+
+        source = self.first_node
+        sink = self.terminal_node
+
+        while True:
+            found_path = self.dfs_find_augmenting_path(residual, source, sink, parent)
+        
+            if not found_path:
+                break
+
+            # Find bottleneck capacity (minimum capacity along path)
+            path_flow = float('Inf')
+            s = sink
+            
+            path = []
+           
+            while s != source:
+                path.append(s)
+                path_flow = min(path_flow, residual[parent[s]][s]['capacity'])
+                s = parent[s]
+            path.append(source)
+            path.reverse()
+            print("Found Path: {", path, "}")
+
+            # Update residual capacities
+            v = sink
+            while v != source:
+                u = parent[v]
+                residual[u][v]['capacity'] -= path_flow
+
+                if residual.has_edge(v, u):
+                    residual[v][u]['capacity'] += path_flow
+                else:
+                    residual.add_edge(v, u, capacity=path_flow)  # Ensure reverse edge
+
+                v = parent[v]
+
+            max_flow += path_flow  # Accumulate max flow
+            print("Maximum Flow", max_flow + self.outflow_start)
+
+        return max_flow + self.outflow_start 
+
+
+
+
 
                 
 
@@ -407,10 +495,10 @@ class GraphInterface:
 
         while True:
             parent = {}  # Dictionary to store the path
-            visited = set()  # Track visited nodes
+            
 
             # Find an augmenting path using DFS
-            found_path = self.dfs_find_augmenting_path(residual, source, sink, visited, parent)
+            found_path = self.dfs_find_augmenting_path(residual, source, sink, parent)
             if not found_path:
                 break  # No more augmenting paths, terminate
 
